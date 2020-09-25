@@ -1,0 +1,199 @@
+---
+title: "Data624_Hw4"
+author: "Vijaya Cherukuri"
+date: "9/22/2020"
+output: html_document
+---
+
+```{r setup, echo=FALSE, cache=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = FALSE, comment=NA, message=FALSE, warning=FALSE)
+library(tidyverse)
+library(corrplot)
+library(Amelia)
+library(kableExtra)
+library(caret)
+```
+
+## Question 3.1
+
+The UC Irvine Machine Learning Repository contains a data set related to glass identification.  The data  consists of 214 glass samples labeled as one of several class categories.  There are nine predictors, including the refractive index and percentages of eight elements: Na, Mg, Al, Si, K, Ca, Ba, and Fe.  The data can be accessed via:
+
+```{r}
+library(mlbench)
+data(Glass)
+str(Glass)
+```
+
+(a) Using visualizations, explore the predictor variables to understand their distributions as well as the relationships between predictors
+
+**First we will take a look at the distribution of the predictors:**
+
+```{r}
+long_glass <- Glass %>%
+  pivot_longer(-Type, names_to = "Predictor", values_to = "Value", values_drop_na = TRUE) %>%
+  mutate(Predictor = as.factor(Predictor))
+long_glass %>%
+  ggplot(aes(Value, color = Predictor, fill = Predictor)) +
+  geom_histogram(bins = 20) +
+  facet_wrap(~ Predictor, ncol = 3, scales = "free") +
+  scale_fill_brewer(palette = "Set1") +
+  scale_color_brewer(palette = "Set1") +
+  theme_light() +
+  theme(legend.position = "none") +
+  ggtitle("Distribution of Predictor Variables")
+```
+
+**Glass is primarly made of silica (Si), soda (Na) and lime (Ca).  Seeing these predictors at higher concentrations is not suprising.**
+
+**Now we will examine how the predictors are related to each other.  We will do that with a correlation plot.**
+
+```{r}
+#ColorBrewer's 5 class spectral color palette
+col <- colorRampPalette(c("#d7191c", "#fdae61", "#ffffbf", "#abdda4", "#2b83ba"))
+Glass %>%
+  select(-Type) %>%
+  cor() %>%
+  round(., 2) %>%
+  corrplot(., method="color", col=col(200), type="upper", order="hclust", addCoef.col = "black", tl.col="black", tl.srt=45, diag=FALSE )
+```
+
+**Most of the predictors are negatively correlated, which makes sense.  They are measuring chemical concentrations on a percentage basis.  As one element increases we would expect a decrease in the others.**
+
+**Most of the correlations are not very strong.  The exception to this is the correlation between calcium oxide and the refraction index is strongly positively correlated.  I am going to take some liberties and summarize the data in a tabular form, because this "visualization" speaks to me:**
+
+```{r, echo=FALSE}
+long_glass %>%
+  group_by(Predictor) %>%
+  summarise(Min = min(Value),
+            `1st Qu.` = quantile(Value, .25),
+            Median = median(Value),
+            Mean = mean(Value),
+            `3rd Qu.` = quantile(Value, .75),
+            Max = max(Value)) %>%
+  kable() %>%
+  kable_styling()
+```
+
+(b) Do there appear to be any outliers in the data?  Are any predictors skewed?
+
+**I want to see how the predictors are distributed by the type of glass.  I will use a scatter plot to do this but will be excluding scilica because of the difference in scale.**
+
+```{r}
+long_glass %>%
+  ggplot(aes(x = Type, y = Value, color = Predictor)) +
+  geom_jitter() +
+  ylim(0, 20) + 
+  scale_color_brewer(palette = "Set1") +
+  theme_light()
+```
+
+**It looks like glass type 1, 2 and 3 are very similar in chemical composition.  There are a couple of observations that appear to be outliers.  For example there are a couple of potasium (K) observations in the type 5 glass that are unusually high.  There is a barium (Ba) observation in type 2 glass that apears to be an outlier along with some calcium (Ca) observations in type 2 glass.**
+
+**Magnesium is bimodal and left skewed. Iron, potasium and barium are right skewed.  The other predictors are somewhat normal.**
+
+(c) Are there any relevant transformations of one or more predictors that might improve the classification model?
+
+**Something like a Box-Cox transformation might improve the classification model's preformance.**
+
+## Question 3.2
+
+The soybean data can also be found at the UC Irvine Machine Learning Repository.  Data were collected to predict disease in 683 soybeans.  The 35 predictors are mostly categorical and include information on the environemental conditions (e.g. temperature, precipitation) and plant conditions (e.g., left spots, mold growth).  The outcome labels consist of 19 distinct classes.  The data can be loaded via:
+
+```{r}
+library(mlbench)
+data(Soybean)
+## See ?Soybean for details
+```
+
+(a) Investigate the frequency distributions for the categorical predictors.  Are any of the distributions degenerate in the ways discussed earlier in this chapter?
+
+**I am assuming the degenerate distibuted variaviables discussed earlier in the chapter refers to section 3.5 on removing predictors.  Here's some frequency tables:**
+
+```{r, results='asis'}
+for (predictor in names(select(Soybean, -Class))){
+  temp <- Soybean %>%
+    group_by(.dots=predictor) %>%
+    tally() %>%
+    arrange(desc(n)) 
+  temp %>%
+    summarise(total = sum(n)) %>%
+    merge(temp) %>%
+    mutate(share = n / total) %>%
+    select(-total) %>%
+    kable() %>%
+    kable_styling() %>%
+    print()
+}
+```
+
+**There's a lot of missing variables. The authors recommended removing variables with near zero variance.  I know that the `caret` package has a function for that.  Here's the output from that function:**
+
+```{r}
+nearZeroVar(Soybean, saveMetrics = T) %>%
+  kable() %>%
+  kable_styling()
+```
+
+**There are three variables (`r names(Soybean)[caret::nearZeroVar(Soybean)]`) that have a near zero variance, and should probably be removed.**
+
+(b) Roughly 18% of the data are missing.  Are there particular predictors that are more likely to be missing?  Is the pattern of missing data related to the classes?
+
+```{r}
+Soybean %>%
+  arrange(Class) %>%
+  missmap(main = "Missing vs Observed")
+```
+
+**There are blocks of observations that are missing.  Since the data are arranged by the classes this suggests that the patterns of missing data are related to the classes.**
+
+(c) Develop a strategy for handling missing data, either by eliminating predictors or imputation.
+
+**I will be eliminating the three near zero variance predictiors.  For all other predictors I will be imputing values.  I don't have any domain expertise that would inform the imputations, so I will be using decision trees to (hopefully) produce good imputations.  It has been my experience that decision trees preform really well.  The `dlookr` package integrates well with the tidyverse.**
+
+```{r}
+library(dlookr)
+Soybean_complete <- Soybean %>%
+  # Impute missing values using rpart
+  mutate(
+    date = imputate_na(Soybean, date, Class, method = "rpart", no_attrs = TRUE),
+    plant.stand = imputate_na(Soybean, plant.stand, Class, method = "rpart", no_attrs = TRUE),
+    precip = imputate_na(Soybean, precip, Class, method = "rpart", no_attrs = TRUE),
+    temp = imputate_na(Soybean, temp, Class, method = "rpart", no_attrs = TRUE),
+    hail = imputate_na(Soybean, hail, Class, method = "rpart", no_attrs = TRUE),
+    crop.hist = imputate_na(Soybean, crop.hist, Class, method = "rpart", no_attrs = TRUE),
+    area.dam = imputate_na(Soybean, area.dam, Class, method = "rpart", no_attrs = TRUE),
+    sever = imputate_na(Soybean, sever, Class, method = "rpart", no_attrs = TRUE),
+    seed.tmt = imputate_na(Soybean, seed.tmt, Class, method = "rpart", no_attrs = TRUE),
+    germ = imputate_na(Soybean, germ, Class, method = "rpart", no_attrs = TRUE),
+    plant.growth = imputate_na(Soybean, plant.growth, Class, method = "rpart", no_attrs = TRUE),
+    leaf.halo = imputate_na(Soybean, leaf.halo, Class, method = "rpart", no_attrs = TRUE),
+    leaf.marg = imputate_na(Soybean, leaf.marg, Class, method = "rpart", no_attrs = TRUE),
+    leaf.size = imputate_na(Soybean, leaf.size, Class, method = "rpart", no_attrs = TRUE),
+    leaf.shread = imputate_na(Soybean, leaf.shread, Class, method = "rpart", no_attrs = TRUE),
+    leaf.malf = imputate_na(Soybean, leaf.malf, Class, method = "rpart", no_attrs = TRUE),
+    stem = imputate_na(Soybean, stem, Class, method = "rpart", no_attrs = TRUE),
+    lodging = imputate_na(Soybean, lodging, Class, method = "rpart", no_attrs = TRUE),
+    stem.cankers = imputate_na(Soybean, stem.cankers, Class, method = "rpart", no_attrs = TRUE),
+    canker.lesion = imputate_na(Soybean, canker.lesion, Class, method = "rpart", no_attrs = TRUE),
+    fruiting.bodies = imputate_na(Soybean, fruiting.bodies, Class, method = "rpart", no_attrs = TRUE),
+    ext.decay = imputate_na(Soybean, ext.decay, Class, method = "rpart", no_attrs = TRUE),
+    int.discolor = imputate_na(Soybean, int.discolor, Class, method = "rpart", no_attrs = TRUE),
+    fruit.pods = imputate_na(Soybean, fruit.pods, Class, method = "rpart", no_attrs = TRUE),
+    seed = imputate_na(Soybean, seed, Class, method = "rpart", no_attrs = TRUE),
+    mold.growth = imputate_na(Soybean, mold.growth, Class, method = "rpart", no_attrs = TRUE),
+    seed.discolor = imputate_na(Soybean, seed.discolor, Class, method = "rpart", no_attrs = TRUE),
+    seed.size = imputate_na(Soybean, seed.size, Class, method = "rpart", no_attrs = TRUE),
+    shriveling = imputate_na(Soybean, shriveling, Class, method = "rpart", no_attrs = TRUE),
+    fruit.spots = imputate_na(Soybean, fruit.spots, Class, method = "rpart", no_attrs = TRUE),
+    roots = imputate_na(Soybean, roots, Class, method = "rpart", no_attrs = TRUE)) %>%
+  # Drop the near zero variance predictors
+  select(-leaf.mild, -mycelium, -sclerotia) 
+```
+
+**Verification that it worked**
+
+```{r}
+Soybean_complete %>%
+  arrange(Class) %>%
+  missmap(main = "Missing vs Observed")
+```
