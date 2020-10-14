@@ -1,0 +1,304 @@
+---
+title: "Data624_Hw6"
+author: "Vijaya Cherukuri"
+date: "10/12/2020"
+output: html_document
+---
+
+```{r setup, echo=FALSE, cache=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, comment=NA, message=FALSE, warning=FALSE)
+library(fpp2)
+library(urca)
+library(kableExtra)
+```
+
+## 8.1 Figure 8.31 shows the ACFs for 36 random numbers, 360 random numbers and 1,000 random numbers
+### a. Explain the differences among these figures. Do they all indicate that the data are white noise?
+
+>Series X1 has one, X2 has 4 and X3 has no autocorrelation outside the 95% limit.
+After observing the picture we can see none of the spikes are larger than the critical value range. This indicates that data are white noise.
+
+### b) Why are the critical values at different distances from the mean of zero? Why are the autocorrelations different in each figure when they each refer to white noise?
+
+>Law of large number states that the number of observations increase the number of large outliers from the mean decreases.  For white noise, spikes should be in critical value range. The formula for the critical values is +/- 1.96/(sqrt(T - d)) where T is the sample size and d is the amount of differencing used.
+
+## 8.2 A classic example of a non-stationary series is the daily closing IBM stock price series (data set ibmclose). Use R to plot the daily closing prices for IBM stock and the ACF and PACF. Explain how each plot shows that the series is non-stationary and should be differenced.
+
+```{r}
+data("ibmclose")
+
+ggtsdisplay(ibmclose)
+```
+
+>Based on the 1st graph we can observer that there is a downward trend which rules out stationary series.
+While coming to ACF plot the lags are outside the critical value range and hence the series is not white noise and not stationary.
+PACF, 1st lag is similar to ACF 1st lag. Here there is a spike in lag 1 which means the series is not stationary.
+
+## 8.3 For the following series, 􀁿nd an appropriate Box-Cox transformation and order of differencing in order to obtain stationary data.
+a. usnetelec
+b. usgdp
+c. mcopper
+d. enplanements
+e. visitors
+
+### a.usnetelec
+
+```{r}
+autoplot(usnetelec)
+ggtsdisplay(usnetelec)
+```
+
+#### Based on above graph we can see it as non stationary series. Transformation in not ndded as data seems to be linear.*
+
+#### We will apply single order difference and see if it becomes stationary
+
+```{r}
+usnetelec %>% 
+  diff() %>%
+  ggtsdisplay()
+```
+
+#### Now we can observe that trend has been removed. r1 for both ACF and PACF are close to 0. There seems to be a white noise series in ACF as it remains within the critial range.
+
+### b.usgdp
+
+```{r}
+autoplot(usgdp)
+ggtsdisplay(usgdp)
+(lambda <- BoxCox.lambda(usgdp))
+autoplot(BoxCox(usgdp,lambda=lambda))
+```
+
+#### We got lambda value of 0.366352. And single order transformation we got a stationary series. 
+
+```{r}
+usgdp %>% 
+  BoxCox(lambda=lambda) %>%
+  diff() %>%
+  ggtsdisplay()
+```
+
+#### In ACF, lag 1 seems to be above the critical value range and it was downward after that with in the critical range and indicating white noise.
+
+### c.mcopper
+
+```{r}
+autoplot(mcopper)
+ggtsdisplay(mcopper)
+(lambda <- BoxCox.lambda(mcopper))
+autoplot(BoxCox(mcopper,lambda=lambda))
+```
+
+```{r}
+mcopper %>% 
+  BoxCox(lambda=lambda) %>%
+  diff() %>%
+  ggtsdisplay()
+```
+
+#### Now We can observe that data seems to be stationary
+
+#### d.enplanements
+
+```{r}
+autoplot(enplanements)
+ggtsdisplay(enplanements)
+(lambda <- BoxCox.lambda(enplanements))
+autoplot(BoxCox(enplanements,lambda=lambda))
+```
+
+```{r}
+enplanements %>% 
+  BoxCox(lambda=lambda) %>%
+  diff(lag=12) %>% 
+  ggtsdisplay()
+```
+
+#### BAsed on above graph we can observer that data is not stationary. We need differencing to make data as stationary.
+
+```{r}
+enplanements %>% 
+  BoxCox(lambda=lambda) %>%
+  diff(lag=12) %>% 
+  diff() %>% 
+  ggtsdisplay()
+```
+
+### e.visitors
+
+```{r}
+autoplot(visitors)
+ggtsdisplay(visitors)
+(lambda <- BoxCox.lambda(visitors))
+autoplot(BoxCox(visitors,lambda=lambda))
+```
+
+```{r}
+visitors %>% 
+  BoxCox(lambda=lambda) %>%
+  diff(lag=12) %>% 
+  diff() %>%
+  ggtsdisplay()
+```
+
+#### Data seems to be stationary after the first order differencing.
+
+## 8.5 For your retail data (from Exercise 3 in Section 2.10), 􀁿nd the appropriate order of di􀁼erencing (after transformation if necessary) to obtain stationary data.
+
+```{r}
+temp = tempfile(fileext = ".xlsx")
+dataURL <- "https://otexts.com/fpp2/extrafiles/retail.xlsx"
+download.file(dataURL, destfile=temp, mode='wb')
+
+retaildata <- readxl::read_excel(temp, skip=1)
+
+myts <- ts(retaildata[,"A3349909T"], frequency=12, start=c(1982,4))
+autoplot(myts)
+``` 
+
+```{r}
+ggtsdisplay(myts)
+ggseasonplot(myts)
+```
+
+#### There seems to be a seasonal behaviour with upward trend and variance. Box cox transformation can benefit this series.
+
+```{r}
+(lambda <- BoxCox.lambda(myts))
+autoplot(BoxCox(myts,lambda=lambda))
+```
+
+```{r}
+myts %>% 
+  BoxCox(lambda=lambda) %>%
+  diff(lag=12) %>%
+  diff() %>% 
+  ggtsdisplay()
+```
+
+### 8.6 Use R to simulate and plot some data from simple ARIMA models.
+### a) Use the following R code to generate data from an AR(1) model with ϕ1=0.6 and σ2=1. The process starts with y1=0.
+
+```{r}
+ar1 <- function(phi){
+  y <- ts(numeric(100))
+  e <- rnorm(100)
+  for(i in 2:100)
+    y[i] <- phi*y[i-1] + e[i]
+  return(y)
+}
+autoplot(ar1(0.6))
+```
+
+### b) Produce a time plot for the series. How does the plot change as you change ϕ1?
+
+#### Time series value changes in below plots with respect to change in ϕ1 value
+
+```{r}
+autoplot(ar1(0.1))
+autoplot(ar1(0.4))
+autoplot(ar1(0.6))
+autoplot(ar1(0.9))
+```
+
+### c) Write your own code to generate data from an MA(1) model with θ1=0.6 and σ2=1.
+
+```{r}
+ma1 <- function(theta){
+  y <- ts(numeric(100))
+  e <- rnorm(100)
+  for(i in 2:100)
+    y[i] <- theta*e[i-1] + e[i]
+  return(y)
+}
+autoplot(ma1(0.6))
+```
+
+### d) d. Produce a time plot for the series. How does the plot change as you change θ1?
+
+```{r}
+autoplot(ma1(0.1))
+autoplot(ma1(0.4))
+autoplot(ma1(0.8))
+```
+
+### e) Generate data from an ARMA(1,1) model with ϕ1=0.6, θ1=0.6 and σ2=1
+
+```{r}
+arma11 <- function(phi, theta, n=100){
+  y <- ts(numeric(100))
+  e <- rnorm(100)
+  for(i in 2:100)
+    y[i] <- phi*y[i-1] + theta*e[i-1] + e[i]
+  return(y)
+}
+autoplot(arma11(0.6, 0.6))
+```
+
+### f) Generate data from an AR(2) model with θ1=−0.8, θ2=0.3, and σ2=1. (Note that these parameters will give a non-stationary series)
+
+```{r}
+ar2 <- function(phi1, phi2, n=100){
+  y <- ts(numeric(100))
+  e <- rnorm(100)
+  for(i in 3:100)
+    y[i] <- phi1*y[i-1] + phi2*y[i-2] + e[i]
+  return(y)
+}
+autoplot(ar2(-0.8,0.3))
+```
+
+### g) Graph the latter two series and compare them.
+
+#### We have already plotted them in the above questions and we can observe that AR(2) series has increase in variance over time.
+
+### 8.7 Consider wmurders, the number of women murdered each year (per 100,000 standard population) in the United States.
+### a) By studying appropriate graphs of the series in R, find an appropriate ARMIA(p,d,q) model for these data.
+
+```{r}
+autoplot(wmurders)
+ggAcf(diff(wmurders, ndiffs(wmurders)))
+ggPacf(diff(wmurders, ndiffs(wmurders)))
+```
+
+Above graphs indicates data is not stationary. We need to difference 2 times to make it stationary. Lag 1 in PACF is outise the range which indicates p value should be 1.
+
+### b) Should you include a constant in the model? Explain.
+
+#### No we should not include constant in the model. For long tern forecasts constant plays an important role.If c is zero then forecast follow straight line and if c is non zero then forecast follows quadratic trend.
+
+### c) Write this model in terms of the backshift operator.
+
+#### (1−ϕ1B)(1−B)2yt=c+(1+θ1B)et
+
+### d) Fit the model using R and examine the residuals. Is the model satisfactory?
+
+```{r}
+model <- arima(wmurders, order = c(1, 2, 1))
+checkresiduals(model)
+
+```
+
+#### Above ACF plot shows that residuals are within the critical range is an indication of residuals behaving a white noise. The model seems to be satisfactory.
+
+### e) Forecast three times ahead. Check your forecasts by hand to make sure that you know periods shown.
+
+```{r}
+forecast(model, h=3) %>%
+  kable() %>%
+  kable_styling()
+```
+
+### f) Create a plot of the series with forecasts and prediction intervals for the next three periods shown.
+
+```{r}
+autoplot(forecast(model, h=3))
+```
+
+### g . Does auto.arima() give the same model you have chosen? If not, which model do you think is better?
+
+```{r}
+auto.arima(wmurders)
+```
+
+#### In my case it is yes. It gave the same model what i had manually choosen.
