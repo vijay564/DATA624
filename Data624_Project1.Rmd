@@ -1,0 +1,380 @@
+---
+title: "Data624_Project1"
+author: "Vijaya Cherukuri"
+date: "10/20/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+## Project 1 - This Project has 3 Parts - 2 required and 1 bonus
+
+
+```{r}
+#Load Required Libraries
+suppressMessages(suppressWarnings(library(fpp2)))
+suppressMessages(suppressWarnings(library(ggplot2)))
+suppressMessages(suppressWarnings(library(dplyr)))
+suppressMessages(suppressWarnings(library(tidyverse)))
+suppressMessages(suppressWarnings(library(scales)))
+suppressMessages(suppressWarnings(library(forecast)))
+suppressMessages(suppressWarnings(library(lubridate)))
+suppressMessages(suppressWarnings(library(readxl)))
+suppressMessages(suppressWarnings(library(tidyr)))
+suppressMessages(suppressWarnings(library(plotly)))
+```
+
+### Part A – ATM Forecast :
+### In part A, I want you to forecast how much cash is taken out of 4 different ATM machines for May 2010.  The data is given in a single file.  The variable ‘Cash’ is provided in hundreds of dollars, other than that it is straight forward. I am being somewhat ambiguous on purpose to make this have a little more business feeling.  Explain and demonstrate your process, techniques used and not used, and your actual forecast.  I am giving you data via an excel file, please provide your written report on your findings, visuals, discussion and your R code via an RPubs link along with the actual.rmd file  Also please submit the forecast which you will put in an Excel readable file.
+
+#### Loading Data and verifying
+```{r}
+df <- readxl::read_excel('ATM624Data.xlsx') %>%
+      drop_na() %>%
+      spread(ATM, Cash) %>% 
+      mutate(DATE = as.Date(DATE, origin='1899-12-30'))
+  
+  
+atm <- ts(df %>% select(-DATE))
+
+atm %>%
+  summary()
+```
+
+#### Analyze the data and look for outliers
+
+```{r}
+head(atm)
+```
+
+#### Plot to display Withdrawls
+
+```{r}
+df %>% gather(atm, Cash, -DATE) %>% 
+  ggplot(aes(x = DATE, y = Cash, col = atm)) +
+  geom_line(show.legend = FALSE) +
+  facet_wrap(~ atm, ncol = 1, scales = "free_y") +
+  labs(title = "Withdrawal by all 4 ATM's", x = "Date") +
+  scale_y_continuous("Cash withdrawals")
+```
+
+>Based on above graph we can observe that Atm1 and Atm2 has seasonal patterns. Atm3 has only last 3 days values and Atm4 has an outlier.
+
+#### Data Wrangling
+
+```{r}
+atm_1 <- atm[, "ATM1"]
+atm_2 <- atm[, "ATM2"]
+atm_3 <- atm[, "ATM3"]
+atm_4 <- atm[, "ATM4"]
+```
+
+#### Use frequency to get weekly measure
+
+```{r}
+atm1 <- ts(atm_1, frequency = 7)
+atm2 <- ts(atm_2, frequency = 7)
+atm3 <- ts(atm_3, frequency = 7)
+atm4 <- ts(atm_4, frequency = 7)
+```
+
+#### Create Time Series for ATM1, ATM2, ATM3 and ATM4
+
+#### For ATM1
+
+```{r}
+ggtsdisplay(atm1, main = "Withdrawals from ATM1")
+```
+
+#### For ATM2
+
+```{r}
+ggtsdisplay(atm2, main = "Withdrawals from ATM2")
+```
+
+#### For ATM3
+
+```{r}
+ggtsdisplay(atm3, main = "Withdrawals from ATM3")
+```
+
+#### For ATM4
+
+```{r}
+ggtsdisplay(atm4, main = "Withdrawals from ATM4")
+```
+
+#### Model
+
+#### Create model for 1st ATM
+
+#### Use ETS 
+```{r}
+fc_atm1_ets <- ets(atm1)
+```
+
+
+```{r}
+autoplot(fc_atm1_ets) +
+  autolayer(fitted(fc_atm1_ets)) +
+  ylab("Cash withdrawals") + xlab("days")
+```
+
+#### Check summary of ets method applied to ATM1
+```{r}
+summary(fc_atm1_ets)
+```
+
+#### Check for residuals
+```{r}
+checkresiduals(fc_atm1_ets)
+```
+
+#### Use ARIMA
+#### Now use ARIMA arima auto function to select the most appropriate model.
+
+```{r}
+atm1_lambda <- BoxCox.lambda(atm1)
+fc_arima_atm1 <- auto.arima(atm1)
+summary(fc_arima_atm1)
+checkresiduals(fc_arima_atm1)
+```
+
+#### Create model for 2nd ATM
+
+#### Use ETS 
+```{r}
+fc_atm2_ets <- ets(atm2)
+```
+
+
+```{r}
+autoplot(fc_atm2_ets) +
+  autolayer(fitted(fc_atm2_ets)) +
+  ylab("Cash withdrawals") + xlab("days")
+```
+
+#### Check summary of ets method applied to ATM2
+```{r}
+summary(fc_atm2_ets)
+```
+
+#### Check for residuals
+```{r}
+checkresiduals(fc_atm2_ets)
+```
+
+#### Use ARIMA for ATM2
+#### Now use ARIMA arima auto function to select the most appropriate model.
+
+```{r}
+atm2_lambda <- BoxCox.lambda(atm2)
+fc_arima_atm2 <- auto.arima(atm2)
+summary(fc_arima_atm2)
+checkresiduals(fc_arima_atm2)
+```
+
+#### Create Model for 3rd ATM
+
+>ATM3 has only 3 values which are present only in the last 3 days. It will be hard to forecast with the limited amount of data that we have. In this case we can use the mean value.
+
+#### Create model for 4th ATM
+
+#### Use ETS 
+```{r}
+fc_atm4_ets <- ets(atm4)
+```
+
+
+```{r}
+autoplot(fc_atm4_ets) +
+  autolayer(fitted(fc_atm4_ets)) +
+  ylab("Cash withdrawals") + xlab("days")
+```
+
+#### Check summary of ets method applied to ATM4
+```{r}
+summary(fc_atm4_ets)
+```
+
+#### Check for residuals
+```{r}
+checkresiduals(fc_atm4_ets)
+```
+
+#### Use ARIMA for ATM4
+#### Now use ARIMA arima auto function to select the most appropriate model.
+
+```{r}
+atm4_lambda <- BoxCox.lambda(atm4)
+fc_arima_atm4 <- auto.arima(atm4)
+summary(fc_arima_atm4)
+checkresiduals(fc_arima_atm4)
+```
+
+#### Fit Model
+
+>Based on the above resultswe can use ARIMA output to fit the model.
+
+```{r}
+atm1_fit<-Arima(atm1, order = c(1, 0, 0), seasonal = c(2, 1, 0), lambda = atm1_lambda)
+atm1_forecast<-forecast(atm1_fit, 31, level = 95)
+atm2_fit<-Arima(atm2, order = c(1, 0, 0), seasonal = c(2, 1, 0), lambda = atm2_lambda)
+atm2_forecast<-forecast(atm2_fit, 31, level = 95)
+atm3_forecast<-meanf(atm3, 31, level = 95)
+atm4_fit<-Arima(atm4, order = c(0, 0, 0), lambda = atm4_lambda)
+atm4_forecast<-forecast(atm4_fit, 31, level = 95)
+```
+
+
+#### Output
+
+#### Export the results of ATM1, ATM2, ATM3 and ATM4 in to a single CSV file.
+```{r}
+data_frame(DATE = rep(max(df$DATE) + 1:31, 4), ATM = rep(names(df)[-1], each = 31), Cash = c(atm1_forecast$mean, atm2_forecast$mean, atm3_forecast$mean, atm4_forecast$mean)) %>% 
+  write_csv("DATA624_ATM_PREDICTION.csv")
+```
+
+
+### Part B – Forecasting Power :
+
+### Part B consists of a simple dataset of residential power usage for January 1998 until December 2013.  Your assignment is to model these data and a monthly forecast for 2014.  The data is given in a single file.  The variable ‘KWH’ is power consumption in Kilowatt hours, the rest is straight forward.    Add this to your existing files above.
+
+#### Loading Data and verifying
+
+```{r}
+power_df <- read_excel("ResidentialCustomerForecastLoad-624.xlsx")
+power_df <- ts(power_df[, "KWH"], start = c(1998, 1), frequency = 12)
+```
+
+```{r}
+autoplot(power_df)
+```
+
+```{r}
+power_lambda <- BoxCox.lambda(power_df)
+power_trans <- BoxCox(power_df, power_lambda)
+ggtsdisplay(diff(power_trans, 12))
+```
+
+#### Ue ARIMA
+#### Now use ARIMA arima auto function to select the most appropriate model
+```{r}
+fc_arima_power <- auto.arima(power_trans)
+summary(fc_arima_power)
+```
+
+#### With Ljung box we will test the residuals
+
+```{r}
+Box.test(resid(fc_arima_power), type = "L", fitdf = 3, lag = 12)
+```
+
+>The p-value 0.01335 is > 0.05 and we used lag 12 for high patterns. Based on the results fir suggests that residuals may be white noise.
+
+```{r}
+power_fit <- Arima(power_df, order = c(2, 1, 1), seasonal = c(0, 0, 2), lambda = power_lambda)
+ggtsdisplay(resid(power_fit), plot.type = "histogram")
+```
+
+```{r}
+power_forecast <- forecast(power_fit, 12, level = 95)
+autoplot(power_forecast)
+```
+
+#### Output
+
+#### Write the forecasted data to a seperate file
+
+```{r}
+data_frame(`YYYY-MMM` = paste0(2014, "-", month.abb), KWH = power_forecast$mean) %>% 
+  write_csv("DATA624_POWER_FORECASTING.csv")
+```
+
+### Part C – Waterflow_Pipe :
+
+### Part C consists of two data sets.  These are simple 2 columns sets, however they have different time stamps.  Your optional assignment is to time-base sequence the data and aggregate based on hour (example of what this looks like, follows).  Note for multiple recordings within an hour, take the mean.  Then to determine if the data is stationary and can it be forecast.  If so, provide a week forward forecast and present results via Rpubs and .rmd and the forecast in an Excel readable file.
+
+#### Loading data and verifying
+
+```{r Warning = FALSE}
+water_1 = read_excel("Waterflow_Pipe1.xlsx",col_types =c("date", "numeric"))
+water_2 = read_excel("Waterflow_Pipe2.xlsx",col_types =c("date", "numeric"))
+```
+
+```{r}
+colnames(water_1)= c("Date_time","WaterFlow")
+colnames(water_2)= c("Date_Time","WaterFlow")
+```
+
+#### As specified in the question, lets try to seperate date and hour reading and combine them to make a single dataset. Additionally group by data and aggregate.
+
+```{r}
+Water_df= water_1 %>% mutate(Date_Time = lubridate::round_date(Date_time,"hour") ) %>% select(Date_Time,WaterFlow) %>% bind_rows(water_2) %>% group_by(Date_Time) %>% summarize(WaterFlowF = mean(WaterFlow, na.rm = T))
+```
+
+#### Specify the frequency as 24
+
+```{r}
+Water_ts = ts(Water_df$WaterFlowF,frequency = 24)
+```
+
+#### Use ETS
+
+```{r}
+ggtsdisplay(Water_ts)
+```
+
+```{r}
+Water_Model1 = ets(Water_ts,lambda=BoxCox.lambda(Water_ts))
+```
+
+#### Check summary of ets method
+```{r}
+summary(Water_Model1)
+```
+
+#### Check for residuals
+
+```{r}
+checkresiduals(Water_Model1)
+```
+
+```{r}
+autoplot(forecast(Water_Model1, 168, level = 95))
+Water_Model1_Forecast = forecast(Water_Model1, 168, level=95)
+```
+
+#### Use ARIMA
+#### Now use ARIMA arima auto function to select the most appropriate model.
+
+```{r}
+Water_Model2 =auto.arima(Water_ts,lambda=BoxCox.lambda(Water_ts))
+```
+
+#### Check summary of ARIMA
+```{r}
+summary(Water_Model2)
+```
+
+#### Check for residuals
+```{r}
+checkresiduals(Water_Model2)
+```
+
+```{r}
+Water_Model2_Forecast = forecast(Water_Model2, 168, level=95)
+
+autoplot(forecast(Water_Model2, 168, level = 95))
+```
+
+#### Wtire forecasted data to file
+
+```{r}
+Water_csv= data_frame(Date_Time = max(Water_df$Date_Time) + lubridate::hours(1:168),
+           WaterFlowF = as.numeric( Water_Model2_Forecast$mean) )
+
+write.csv(Water_csv,"DATA624_WATERPIPE_FORECAST.csv")
+```
