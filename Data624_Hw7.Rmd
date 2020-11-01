@@ -1,0 +1,281 @@
+---
+title: "Data624_Hw7"
+author: "Vijaya Cherukuri"
+date: "10/29/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+## 6.2. Developing a model to predict permeability (see Sect. 1.4) could save significant resources for a pharmaceutical company, while at the same time more rapidly identifying molecules that have a sufficient permeability to become a drug:
+
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(varImp)
+library(elasticnet)
+```
+
+### *a.Start R and use these commands to load the data:*
+
+```{r}
+library(AppliedPredictiveModeling)
+data(permeability)
+str(permeability)
+```
+
+### The matrix fingerprints contains the 1,107 binary molecular predictors for the 165 compounds, while permeability contains permeability response.
+
+### *(b) The fingerprint predictors indicate the presence or absence of substructures of a molecule and are often sparse meaning that relatively few of the molecules contain each substructure. Filter out the predictors that have low frequencies using the nearZeroVar function from the caret package. How many predictors are left for modeling?*
+
+```{r}
+library(caret)
+dim(fingerprints)
+```
+
+#### We have 1107 perdictors as mentioned in 'a' part. 
+
+```{r}
+fp <- fingerprints[, -nearZeroVar(fingerprints)]
+dim(fp)
+```
+
+#### Originally we have 1107 predictors, after using nearzero function we are left out with 388 predictors for modeling.
+
+### *c) Split the data into a training and a test set, pre-process the data, and tune a PLS model. How many latent variables are optimal and what is the corresponding resampled estimate of R2?*
+
+#### Biuld the model
+
+```{r}
+set.seed(17)
+trainingRows <- createDataPartition(permeability, p = .80, list= FALSE)
+
+x_train <- fp[trainingRows, ]
+y_train <- permeability[trainingRows]
+
+x_test <- fp[-trainingRows, ]
+y_test <- permeability[-trainingRows] 
+```
+
+```{r}
+Pls_Fit <- train(x=x_train,
+                y=y_train, 
+                method='pls',
+                metric='Rsquared',
+                tuneLength=20,
+                trControl=trainControl(method='cv'),
+                preProcess=c('center', 'scale')
+                )
+
+Pls_Result <- Pls_Fit$results
+Pls_Fit
+```
+
+#### The optional ncomp value we got is 9 fwith R2 value as 0.4796270.
+
+```{r}
+plot(Pls_Fit)
+```
+
+### *(d) Predict the response for the test set. What is the test set estimate of R2?*
+
+```{r}
+plsPred <- predict(Pls_Fit, newdata=x_test)
+postResample(pred=plsPred, obs=y_test)
+```
+
+#### R2 for test set prediction is 0.3732504
+
+### *(e) Try building other models discussed in this chapter. Do any have better predictive performance?*
+
+#### Build Ridge model
+
+```{r}
+set.seed(17)
+ridgeFit <- train(x=x_train,
+                  y=y_train,
+                  method='ridge',
+                  metric='Rsquared',
+                  tuneGrid=data.frame(.lambda = seq(0, 1, by=0.1)),
+                  trControl=trainControl(method='cv'),
+                  preProcess=c('center','scale')
+                  )
+```
+
+```{r}
+ridgeFit
+plot(ridgeFit)
+```
+
+#### Build lasso model
+
+```{r}
+set.seed(17)
+lassoFit <- train(x=x_train,
+                  y=y_train,
+                  method='lasso',
+                  metric='Rsquared',
+                  tuneGrid=data.frame(.fraction = seq(0, 0.5, by=0.05)),
+                  trControl=trainControl(method='cv'),
+                  preProcess=c('center','scale')
+                  )
+
+lassoFit
+plot(lassoFit)
+```
+
+#### Build ElasticNet model
+
+```{r}
+set.seed(1)
+enetFit <- train(x=x_train,
+                 y=y_train,
+                 method='enet',
+                 metric='Rsquared',
+                 tuneGrid=expand.grid(.fraction = seq(0, 1, by=0.1), 
+                                      .lambda = seq(0, 1, by=0.1)),
+                 trControl=trainControl(method='cv'),
+                 preProcess=c('center','scale')
+                  )
+enetFit
+plot(enetFit)
+```
+
+#### Compare models
+
+```{r}
+multiResample <- function(models, newdata, obs){
+  res = list()
+  methods = c()
+  i = 1
+  for (model in models){
+    pred <- predict(model, newdata=newdata)
+    metrics <- postResample(pred=pred, obs=obs)
+    res[[i]] <- metrics
+    methods[[i]] <- model$method
+    i <- 1 + i
+  }
+  names(res) <- methods
+  return(res)
+}
+
+models <- list(ridgeFit, lassoFit, enetFit)
+(resampleResult <- multiResample(models, x_test, y_test))
+```
+
+### *(f) Would you recommend any of your models to replace the permeability laboratory experiment?*
+
+#### Plot a histogram to see what target variable permeability is indicating
+
+```{r}
+hist(permeability, col="lightyellow")
+```
+
+#### The above graph of target variable permeability indicates that most of the results are below 10 and many afe under 5. I would not recommend any other models to replace permeability laboratory experiment.
+
+## 6.3. A chemical manufacturing process for a pharmaceutical product was discussed in Sect. 1.4. In this problem, the objective is to understand the relationship between biological measurements of the raw materials (predictors), measurements of the manufacturing process (predictors), and the response of product yield. Biological predictors cannot be changed but can be used to assess the quality of the raw material before processing. On the other hand, manufacturing process predictors can be changed in the manufacturing process. Improving product yield by 1% will boost revenue by approximately one hundred thousand dollars per batch:
+
+### *(a) Start R and use these commands to load the data:*
+
+```{r}
+library(AppliedPredictiveModeling)
+data(ChemicalManufacturingProcess)
+str(ChemicalManufacturingProcess)
+```
+
+### The matrix processPredictors contains the 57 predictors (12 describing the input biological material and 45 describing the process predictors) for the 176 manufacturing runs. yield contains the percent yield for each run.
+
+### *(b) A small percentage of cells in the predictor set contain missing values. Use an imputation function to fill in these missing values (e.g., see Sect. 3.8).*
+
+#### We will use the missmap function available in Amelia package to find out the missing values
+```{r}
+library(Amelia)
+missmap(ChemicalManufacturingProcess, col = c("red", "lightgreen"))
+```
+
+#### Use bagImpute method to impute missing values
+```{r}
+cmpImpute <- preProcess(ChemicalManufacturingProcess[,-c(1)], method=c('bagImpute'))
+cmpImpute
+```
+
+### *(c) Split the data into a training and a test set, pre-process the data, and tune a model of your choice from this chapter. What is the optimal value of the performance metric?*
+
+```{r}
+cmp <- predict(cmpImpute, ChemicalManufacturingProcess[,-c(1)])
+
+set.seed(43)
+trainRow <- createDataPartition(ChemicalManufacturingProcess$Yield, p=0.8, list=FALSE)
+x_train <- cmp[trainRow, ]
+y_train <- ChemicalManufacturingProcess$Yield[trainRow]
+x_test <- cmp[-trainRow, ]
+y_test <- ChemicalManufacturingProcess$Yield[-trainRow]
+```
+
+#### I would like to go with Elastic Net model. Lambda ranges b/w 0 and 1. RMSE is used as metric
+
+```{r}
+set.seed(43)
+enetFit <- train(x=x_train,
+                 y=y_train,
+                 method='enet',
+                 metric='RMSE',
+                 tuneGrid=expand.grid(.fraction = seq(0, 1, by=0.1), 
+                                      .lambda = seq(0, 1, by=0.1)),
+                 trControl=trainControl(method='cv'),
+                 preProcess=c('center','scale')
+                  )
+enetFit
+plot(enetFit)
+```
+
+### *(d) Predict the response for the test set. What is the value of the performance metric and how does this compare with the resampled performance metric on the training set?*
+
+```{r}
+enet_Pred <- predict(enetFit, newdata=x_test)
+(predResult <- postResample(pred=enet_Pred, obs=y_test))
+```
+
+#### We got a RMSE value of 1.0290128 which is less tham RMSE for training set. Test set should be better.
+
+### *(e) Which predictors are most important in the model you have trained? Do either the biological or process predictors dominate the list?*
+
+```{r}
+coeffs <- predict.enet(enetFit$finalModel, s=enetFit$bestTune[1, "fraction"], type="coef", mode="fraction")$coefficients
+```
+
+#### Display the predictors
+
+```{r}
+coeffs
+```
+
+#### Bassed on above results we can observe some of the predictors are zero.
+
+#### Lets find out the important predictors
+
+```{r}
+coeffs.sorted <- abs(coeffs)
+coeffs.sorted <- coeffs.sorted[coeffs.sorted>0]
+(coeffs.sorted <- sort(coeffs.sorted, decreasing = T))
+(temp <- varImp(enetFit))
+```
+#### Above dataframe gave 20 most important values out to 57. Even in that 20 we found 11 values for Manufacturing process and 9 values for Biological Material.
+
+### *(f) Explore the relationships between each of the top predictors and the response. How could this information be helpful in improving yield in future runs of the manufacturing process?*
+
+#### This part can be easily analyzed by checking the number of positive and negative coefficients. If we have more positive coefficients then it yield will be imporoved and for negative coeffecients it is viceversa.
+
+#### Positive coefficeints for Maufacturing Process
+
+```{r}
+coeffs_mp <- coeffs.sorted[grep('ManufacturingProcess', names(coeffs.sorted))] %>% names() %>% coeffs[.]
+coeffs_mp[coeffs_mp>0]
+```
+
+#### Negative coefficeints for Maufacturing Process
+
+```{r}
+coeffs_mp[coeffs_mp<0]
+```
