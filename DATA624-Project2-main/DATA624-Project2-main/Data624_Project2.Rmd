@@ -1,0 +1,890 @@
+---
+title: "DATA 624 - Predictive Analytics"
+author: "Vijaya Cherukuri, Samantha Deokinanan, Habib Khan, Priya Shaji"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    keep_tex: yes
+    toc: yes
+    toc_depth: 3
+subtitle: 'Fall 2020 - Project #2'
+urlcolor: purple
+abstract: An analysis of ABC Beverage to determine the pH level of the beverages and
+  evaluate the accuracy of the predictive model with rigorous statistical testings.
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, error=FALSE, warning=FALSE, message=FALSE, fig.align="center")
+```
+
+### Overview
+
+Due to new regulations by abc beverage, the company leadership requires that the 
+production team had a better understanding of the manufacturing process, the 
+predictive factors and their relationship to the ph of the beverages.  Therefore, 
+this project was an effort to find the optimal predictive variables related to the 
+ph of the beverages and evaluate the accuracy of the predictive model for ph of 
+beverages with rigorous statistical testing. 
+ 
+the selection of a method depends on many factors - the context of the predictions, 
+the relevance of the historical data given, the degree of accuracy, etc.  As a 
+result, these factors were cross-validated and examined for the potentially greater 
+accuracy model at a minimal cost
+
+### R Packages
+
+The statistical tool that will be used to fascinate in the modeling of the data 
+was `r`. The main packages used for data wrangling, visualization, and graphics were 
+listed in the `code appendix`.  Any other minor packages for analysis will be 
+listed when needed
+
+```{r rpackages}
+# Required R packages
+library(tidyverse)
+library(kableExtra)
+library(psych)
+library(caret)
+library(mice)
+library(corrplot)
+library(earth)
+library(xgboost)
+library(Cubist)
+library(caretEnsemble)
+library(vip)
+```
+
+### Data Exploration  
+
+The data set was historic data containing predictors associated with the ph and was 
+provided in an excel file.  We will utilize this historic data set to analyze and 
+predict the pH of beverages. 
+
+```{r loaddata}
+# Set master seed
+set.seed(52508)
+
+# Set filepaths for data ingestion
+urlRemote  = "https://github.com/"
+pathGithub = "greeneyefirefly/DATA624-Project2/blob/main/"
+fileTrain = "StudentData.xlsx"
+fileTest = "StudentEvaluation.xlsx"
+
+# Read training file
+tempfile_1 = tempfile(fileext = ".xlsx")
+tempfile_2 = tempfile(fileext = ".xlsx")
+
+# Load training dataset
+download.file(url = paste0(urlRemote, pathGithub, fileTrain, "?raw=true"), 
+              destfile = tempfile_1, 
+              mode = "wb", 
+              quiet = TRUE)
+train_df = data.frame(readxl::read_excel(tempfile_1,skip=0))
+
+# Load test dataset
+download.file(url =  paste0(urlRemote, pathGithub, fileTest, "?raw=true"), 
+              destfile = tempfile_2, 
+              mode = "wb", 
+              quiet = TRUE)
+eval_df = data.frame(readxl::read_excel(tempfile_2,skip=0))
+
+# Number of training observations
+ntrobs = dim(train_df)[[1]]
+
+# Transform Brand.Code to factor
+train_df$Brand.Code = as.factor(train_df$Brand.Code)
+eval_df$Brand.Code = as.factor(eval_df$Brand.Code)
+```
+
+#### Predictive Variables
+
+There were `r ntrobs` observations of 31 numeric predictor variables and 1 factor 
+predictor variable, namely `brand. Code`.  All other variables provide measurements 
+for the manufacturing process of each brand of beverage
+
+##### Summary Statistic
+
+Based on the summary statistic for the beverage brands, `table 1`, we made some 
+initial observations.  The data set did not have complete cases, thus, there was 
+a need for imputation.  Some variables were highly skewed, such as `mfr`, 
+`temperature`, and `oxygen. Filler`, which will need data transformation to 
+satisfy the assumption of normality.  Lastly, the `hyd. Pressure` variables appeared 
+to be near-zero variance predictors given that zero accounts for more than 30% of 
+these variables.  Such a zero variance predictor will never be chosen for a split 
+since it offers no possible predictive information 
+
+\small
+```{r sumstat}
+kable(describe(train_df)[,-c(1,6,7,13)], 
+      caption = "Descriptive Statistics for All Brand Code",
+      digit = 2L)
+```
+\normalsize
+
+##### Missing Data
+
+The graph below indicates the amount of missing data the training data contains.  
+It appears that more than 8% of the missing data was from the `MFR` variable.  This 
+further suggests that 79% were complete.  There were no missingness patterns, and 
+their overall proportion was not extreme.  This was good because for some imputation 
+methods, such as certain types of multiple imputations, having fewer missingness 
+patterns was helpful, as it requires fitting fewer models
+
+```{r missing}
+na.counts = as.data.frame(((sapply(train_df, 
+                                   function(x) sum(is.na(x))))/nrow(train_df))*100)
+names(na.counts) = "counts"
+na.counts = cbind(variables = rownames(na.counts), 
+                  data.frame(na.counts, row.names = NULL))
+
+na.counts %>% arrange(counts) %>% mutate(name = factor(variables, levels = variables)) %>%
+  ggplot(aes(x = name, y = counts)) + geom_segment( aes(xend = name, yend = 0)) +
+  geom_point(size = 2, color = "steelblue2") + coord_flip() + theme_bw() +
+  labs(title = "Proportion of Missing Data", x = "Variables", y = "% of Missing data") +
+  scale_y_continuous(labels = scales::percent_format(scale = 1))
+```
+
+##### Outlier
+
+Further exploration revealed that some variables may be strongly influenced by 
+outliers.  An outlier is an observation that lies an abnormal distance from other 
+values in a random sample.  Outliers in the data could distort predictions and affect 
+the accuracy, therefore, these were corrected by imputation.
+
+```{r outliers}
+temp = data.frame(variables = NA, outlier = NA)
+for (i in 2:33){
+  temp = rbind(temp, c(names(train_df)[i],
+                             length(boxplot(train_df[i], plot = FALSE)$out)))
+}
+remove = apply(temp, 1, function(row) all(row !=0 )) 
+temp = na.omit(temp[remove,])
+row.names(temp) = NULL
+kable(temp, caption = "Predictive Variables with Outlier")
+
+ggplot(data = reshape2::melt(train_df) , aes(x = variable, y = log(abs(value)))) + 
+geom_boxplot(fill = 'steelblue2', outlier.alpha = 0.75) +
+  labs(title = 'Boxplot: Scaled Training Set',
+       x = 'Variables',
+       y = 'log-Normalized Values') +
+  theme(panel.background = element_rect(fill = 'white'),
+        axis.text.x = element_text(size = 10, angle = 90)) 
+```
+
+##### Correlation
+
+The corrgram below graphically represents the correlations between the numeric 
+predictor variables, when ignoring the missing variables. Most of the numeric 
+variables were uncorrelated with one another, but there were a few highly correlated
+pairs. 
+
+```{r corrgram, fig.width=6, fig.height=6}
+corrplot::corrplot(cor(train_df[,-1], use = 'complete.obs'),
+         method = 'ellipse', type = 'lower', order = 'hclust',
+         hclust.method = 'ward.D2', tl.cex = 0.7)
+```
+
+Moreover, to build a smaller model without predictors with extremely high 
+correlations, it was best to reduce the number of predictors such that there 
+were no absolute pairwise correlations above 0.90.  The list below shows only 
+significant correlations (at 5% leveled) for the top 10 highest correlations by 
+the correlation coefficient.  The results show that these ten had a correlation 
+of greater than 0.95.
+
+```{r corr}
+corr = cor(train_df[,-1], use = 'complete.obs')
+corr[corr == 1] = NA 
+corr[abs(corr) < 0.90] = NA 
+corr = na.omit(reshape::melt(corr))
+kable(head(corr[order(-abs(corr$value)),], 10), 
+      caption = "Top 10 Highly Correlated Predictor Candidates")
+```
+
+#### Target Variable (pH)
+
+The response variable, `pH` had a couple of missing values.  There was also a 
+detection of outliers, which explained the skewness in the variable.  The 
+plot below highlights that a majority of the pH levels was less than 8.75.
+This suggested that the beverages are alkaline based.
+
+```{r tragetviz}
+train_df %>%
+  ggplot(aes(PH, fill = PH > 8.75)) + 
+  geom_histogram(bins = 30) +
+  theme_bw() +
+  theme(legend.position = 'center') +
+  labs(y = 'Count', title = 'pH Levels of Training Set') 
+```
+
+### Data Preparation 
+
+#### Pre-Processing of Predictors
+
+Firstly, we treated missing data and outlier by imputing them.  The random 
+forest (RF) missing data algorithms was implemented because this could handle 
+mixed types of missing data, adaptable to interactions and non-linearity, and 
+they had the potential to scale to big data settings.  This would help to account 
+for the uncertainty in the individual imputations.  In addition, near-zero 
+variable diagnostics were performed on the predictors to identify if they had very few 
+unique values relative to the number of samples and the ratio of the frequency 
+of the most common value to the frequency of the second most common value was 
+large. If true, these were removed.
+
+```{r impute, eval = FALSE}
+set.seed(525)
+# Train set
+processed_train_df = mice(train_df, method = 'rf', print = FALSE, m = 3, maxit = 3)
+train_df_cleaned = complete(processed_train_df)
+
+predictors = nearZeroVar(train_df_cleaned)
+train_df_cleaned = train_df_cleaned[,-predictors]
+
+# Evaluation set
+processed_eval_df = mice(eval_df, method = 'rf', print = FALSE, m = 3, maxit = 3)
+eval_df_cleaned = complete(processed_eval_df)
+```
+```{r}
+train_df_cleaned = readRDS("train_df_cleaned.rds")
+eval_df_cleaned = readRDS("eval_df_cleaned.rds")
+```
+
+#### Creating Dummy Variables
+
+`Brand Code` was the only categorical variable within this data set.  It 
+represents the brand code of the beverages with values A, B, C, and D.  For 
+the purpose of modeling, it was converted into a set of dummy variables.
+
+```{r dummyVars}
+set.seed(525)
+# Train set
+dummy.brand.code = dummyVars(PH ~ Brand.Code, data = train_df_cleaned)
+train_dummy = predict(dummy.brand.code, train_df_cleaned)
+train_df_cleaned = cbind(train_dummy, train_df_cleaned) %>% select(-Brand.Code)
+
+# Evaluation set 
+eval_df_cleaned$PH = 1
+dummy.brand.code = dummyVars(PH ~ Brand.Code, data = eval_df_cleaned)
+eval_dummy = predict(dummy.brand.code, eval_df_cleaned)
+eval_df_cleaned = cbind(eval_dummy, eval_df_cleaned) %>% select(-Brand.Code, -PH)
+```
+
+#### Correlation 
+
+Next, to filter out highly correlated predictors, we removed those that have 
+an absolute correlation coefficient greater than 0.90. This resulted in 25 
+of the 32 predictor variables are kept.
+
+```{r corr_clean}
+# Train set
+tooHigh = findCorrelation(cor(train_df_cleaned), 0.90)
+train_df_cleaned = train_df_cleaned[, -tooHigh]
+```
+
+#### Normality
+
+The data was then pre-processed to fulfill the assumption of normality using 
+the Yeo-Johnson transformation (Yeo and Johnson, 2000). This technique attempts 
+to find the value of lambda that minimizes the Kullback-Leibler distance between 
+the normal distribution and the transformed distribution. This method had the 
+advantage of working without having to worry about the domain of x. 
+
+```{r normality}
+set.seed(525)
+# Train set
+processed_train_df = preProcess(train_df_cleaned, method = c("YeoJohnson"))
+train_df_cleaned =  predict(processed_train_df, train_df_cleaned)
+
+# Evaluation set
+processed_eval_df = preProcess(eval_df_cleaned, method = c("YeoJohnson"))
+eval_df_cleaned =  predict(processed_eval_df, eval_df_cleaned)
+```
+
+#### Training & Testing Split
+
+All the models were trained on the same approximately 70% of the training set, 
+reserving 30% for validation of which model to select for the pH estimation on 
+the supplied evaluation set.
+
+```{r trainTestSplit}
+# Create training and testing split from training data
+set.seed(525)
+intrain = createDataPartition(train_df_cleaned$PH, p = 0.70, list = FALSE)
+
+# Train & Test predictor variables
+train.p = train_df_cleaned[intrain, ] %>% select(-PH)
+test.p = train_df_cleaned[-intrain, ] %>% select(-PH)
+
+# Train & Test response variable (pH)
+train.r = train_df_cleaned$PH[intrain]
+test.r = train_df_cleaned$PH[-intrain]
+```
+
+### Building the Models 
+
+The relationship between these manufacturing processes with pH is not known. 
+Therefore, we investigated various regression and classification families. 
+
+#### Model #1: Baseline Model
+
+We started with a simple linear model to serve as a baseline. This included 
+all variables in the training data set. 
+
+```{r baseline}
+# Baseline linear model
+set.seed(525)
+baseline = lm(train.r ~ ., data = train.p)
+kable(summary(baseline)$coefficients, digits = 3L,
+      caption = 'Model 1 - Baseline Linear Regression Output')
+```
+
+We immediately saw that a few variables exceeded the 0.05 p-value threshold 
+for significance. The intercept itself suggested that with no information on the
+manufacturing processes, a beverage is likely to have a pH balance of a killer 
+369! This baseline model also only account for 40.4% of the variability of the 
+data. Therefore, there was a need for a better model. We focused and selected our 
+model based on how well it explains that data and the accuracy of the results. 
+
+#### Model #2: Multivariate Adaptive Regression Splines
+
+MARS is an algorithm that essentially creates a piecewise linear model which 
+provides an intuitive stepping block into non-linearity after grasping the 
+concept of linear regression and other intrinsically linear models. Two tuning 
+parameters associated with the MARS model was done to identify the optimal 
+combination of these hyperparameters that minimize prediction error. 
+
+```{r mars, eval = FALSE}
+set.seed(525) 
+marsGrid = expand.grid(.degree = 1:2,
+                       .nprune = 2:38) 
+marsModel = train(x = train.p, 
+                  y = train.r, 
+                  method = "earth", 
+                  tuneGrid = marsGrid, 
+                  trControl = trainControl(method = "cv", 
+                                           number = 10))
+```
+```{r}
+marsModel = readRDS("marsModel.rds")
+```
+```{r mars.fig, fig.height=4, fig.width=8}
+plot(marsModel, main = "RMSE of MARS Model")
+```
+
+RMSE was used to select the optimal MARS model using the smallest value. The best
+tune for the MARS model which resulted in the smallest root mean squared error was
+with 2 degrees of interactions and the number of retained terms of 20. It had 
+RMSE = 0.126, and $R^2$ = 0.468. In this case, it did account for the largest 
+portion of the variability in the data than all other variables, and it produced 
+the smallest error. 
+
+\small
+```{r mars.coef}
+kable(summary(marsModel$finalModel)$coefficients,
+      digits = 2L,
+      caption = "Model 2: MARS Model Coefficient")
+```
+\normalsize
+
+Having no other information, the MARS model expects a beverage pH level of about 
+8.40. This meant that the model identified factors that lean more to decreasing 
+the pH than to increase it. It was also less than the expected value with a 
+difference of 0.15.
+
+Contributing coefficients are those which lie within the 95% level of significance.
+A positive coefficient indicates that as the value of the predictor increases, the 
+response variable also tends to increase. A negative coefficient suggests that as 
+the predictor increases, the response variable tends to decrease. In addition to 
+pruning the number of knots, the potential interactions between different hinge 
+functions are illustrated. There were quite a few interaction terms between multiple 
+hinge functions. 
+
+#### Model #3: Cubist
+
+This is a prediction-oriented regression model that initially creates a tree 
+structure, and then collapses each path through the tree into a rule. A regression
+model is fit for each rule based on the data subset defined by the rules. The 
+collection of rules are pruned or combined, and the candidate variables for the 
+models are the predictors that were pruned away. 
+
+```{r cubist, eval = FALSE}
+set.seed(525)
+cubModel = train(x = train.p,
+                 y = train.r,
+                 method = "cubist",
+                 tuneLength = 10,
+                 trControl = trainControl(method = "cv", 
+                                          repeats = 5))
+```
+```{r}
+cubModel = readRDS("cubModel.rds")
+```
+```{r cub.fig, fig.height=4, fig.width=8}
+plot(cubModel, main = "RMSE of Cubist Tree Model")
+```
+
+RMSE was used to select the optimal model using the smallest value. The best tune 
+for the cubist model which resulted in the smallest root mean squared error was 
+with 20 committees and correct the prediction using the 9-nearest neighbors. It 
+had RMSE = 0.104, and $R^2$ = 0.635. In this case, it did account for the largest 
+portion of the variability in the data than all other variables, and it produced 
+the smallest error which makes it the best fit.
+
+```{r cub.coef, fig.height=5}
+dotPlot(varImp(cubModel), main = 'Variable Importance for the Cubist Model')
+```
+
+The Cubist output provided the percentage of times where each variable was used 
+in the condition or the linear model. At each split of the tree, Cubist saved a 
+linear model after feature selection. The variable importance used here was a 
+linear combination of the usage in the rule conditions and the model. From the 
+plot, the most important variable was `Mnf.Flow` followed by `Alch.Rel` and 
+`Pressure.Vacuum`.
+
+#### Model #4: Partial Least Squares
+
+Partial Least Squares is a technique which minimizes the predictors to a smaller
+set of uncorrelated components and performs least squares regression on these 
+components instead of on the original data. It is useful when the predictors 
+have high correlation. Another advantage of PLS is that it does not assume that 
+the predictors are fixed and predictors are measured with errors. It makes the 
+model more robust. It was ideal to use PLS in this situation as there were many 
+predictors and not enough sample size. Also, there were high correlations among 
+some of the predictors. In this model, we trained the data and later we evaluated
+the performance on the test set to see how the model was performing based on RMSE 
+and r-squared values. The data was also centered and scaled through preProcess function. 
+
+```{r pls}
+set.seed(393)
+plsModel = train(x = train.p,
+                 y = train.r,
+                 method = "pls",
+                 tuneLength = 20,
+                 trControl= trainControl(method="cv"),
+                 preProcess=c('center','scale'))
+```
+```{r pls.fig, fig.height=4, fig.width=8}
+plot(plsModel, main = "RMSE of PLS Model")
+```
+
+#### Model #5: Gradient Boosting
+
+Gradient boosting is one of the most powerful techniques for building predictive 
+models. Gradient boosting involves three elements:  
+
+1. A loss function to be optimized.   
+2. A weak learner to make predictions.   
+3. An additive model to add weak learners to minimize the loss function.    
+
+A benefit of the gradient boosting framework is that a new boosting algorithm 
+does not have to be derived for each loss function but at the same time it is a
+greedy algorithm and it can over-fit a training data set quickly. It is quite 
+fascinating for accuracy and speed especially with large and complex data and 
+one of the most used techniques among the data scientists that is why we used it 
+and evaluated how well it performed in in our situation. 
+
+```{r gbm, eval = FALSE}
+set.seed(20350)
+grid <- expand.grid(n.trees=seq(100, 1000, by = 100), 
+                    interaction.depth=c(5, 10, 15), 
+                    shrinkage=0.1, 
+                    n.minobsinnode=c(5, 10, 15))
+gbm_m <- train(x = train.p,
+               y = train.r, 
+               method = 'gbm',
+               tuneGrid = grid,
+               trControl = trainControl(method = "cv",
+                                        repeats = 5),
+               verbose = FALSE)
+```
+```{r}
+gbm_m = readRDS("gbm_m.rds")
+```
+```{r gbm.fig, fig.height=4, fig.width=8}
+plot(gbm_m, main = "RMSE of Gradient Boosting Model")
+```
+
+Tuning parameter 'shrinkage' was held constant at a value of 0.1. RMSE 
+was used to select the optimal model using the smallest value. The final 
+values used for the model were n.trees = 800, interaction.depth = 15, 
+and the minimum number of observations in trees’ terminal nodes is 5.
+
+#### Model #6: Random Forest
+
+Random forest is a machine learning algorithm that contains a forest with number
+of trees. These trees are called decision trees therefore it consists of random 
+collection of forest trees. It can be used for both classification and regression 
+easily. The best part of using random forest is that it provides higher accuracy 
+through cross validation. It handles the missing values and maintains the accuracy 
+of a large proportion of data. It would not allow over-fitting if there are more trees 
+in the model and it has the power to handle any data set no matter if it is small or 
+large with any dimensionality. It seemed like a wonderful algorithm to use in our 
+situation. We used random forest regression and then compared its performance with 
+the other models to select the best model out of them. It is highly used in medicines, 
+chemistry, stock market, banking sector and e-commerce. 
+
+```{r rf, eval = FALSE}
+set.seed(9988)
+rfModel <- train(x = train.p,
+                 y = train.r,
+                 method = "rf",
+                 tuneLength = 10,
+                 trControl = trainControl(method = "cv", 
+                                          repeats = 5))
+```
+```{r}
+rfModel = readRDS("rfModel.rds")
+```
+```{r rf.fig, fig.height=4, fig.width=8}
+plot(rfModel, main = "RMSE of Random Forest Model")
+```
+
+The best tune for the random forest model which resulted in the smallest root 
+mean squared error was with the optimal number of randomly selected predictors 
+to choose from at each split being 20. It had RMSE = 0.104, and $R^2$ = 0.65. 
+
+Let us display informative variables picked by Random Forest model using `varImp`. 
+Random Forest model picked the most informative variables among which top three 
+variables are `Mnf.Flow`, `Brand.Code` and `Usage.cont`. These are the variables 
+which were most related to the pH of beverages.
+
+```{r rf.varImp, fig.height=5}
+dotPlot(varImp(rfModel), main = 'Variable Importance for the Random Forest Model')
+```
+
+Therefore, `Mnf.Flow` is the most important variable followed by `Brand.Code` , 
+affecting pH value of beverages.
+
+#### Model #7: Ensemble Regression
+
+The last model built was an ensemble regression. The goal of ensemble regression
+was to combine several models to improve the prediction accuracy in 
+learning problems with a numerical target variable. There were three phases of 
+processing ensemble learning. These include the generation phase, the pruning 
+phase, and the integration phase. Given a list of caret models, we built a 
+function that can be used to specify a higher-order model to learn how to best 
+combine the predictions of sub-models. The 4 sub-models were the best four models 
+created thus far based on their RMSEs. More specifically, these were:
+
+* Multivariate Adaptive Regression Splines
+* Cubist
+* Gradient Boosting
+* Random Forest
+
+```{r ensemble, eval = FALSE}
+set.seed(525)
+# Model Tuning Grids
+marsGrid = expand.grid(.degree = 2, .nprune = 20)
+cubGrid = expand.grid(.committees = 20, .neighbors = 9)
+rfGrid = expand.grid(mtry = 20)
+xgbGrid = expand.grid(eta = 0.01, nrounds = 1000, max_depth = 6,
+                      gamma = 0, colsample_bytree = 0.8,
+                      min_child_weight = 0.8, subsample = 0.8)
+# List of Algorithms to use in Ensemble
+tuning_list = list(caretModelSpec(method = "earth", tuneGrid = marsGrid),
+                   caretModelSpec(method = "cubist", tuneGrid = cubGrid),
+                   caretModelSpec(method = "rf", tuneGrid = rfGrid,
+                                  importance = TRUE),
+                   caretModelSpec(method = "xgbTree", tuneGrid = xgbGrid))
+# Adding the train controls
+control = trainControl(method = 'cv',
+                       number = 5,
+                       savePredictions = 'final',
+                       index = createFolds(train.r, 5),
+                       allowParallel = TRUE) 
+model_list = caretList(x = train.p,
+                       y = train.r,
+                       trControl = control,
+                       tuneList = tuning_list)
+# Combine several predictive models via stacking
+ensembleModel = caretStack(model_list,
+                           method = "glmnet",
+                           metric = "RMSE",
+                           trControl=trainControl(method = "cv",
+                                                  number = 5,
+                                                  savePredictions = "final"))
+```
+```{r}
+ensembleModel = readRDS("ensembleModel.rds")
+```
+```{r ensemble_imp, fig.height=3}
+plot(varImp(ensembleModel$ens_model), main = "Model Importance")
+```
+
+From the plot, it is clear that the random forest model plays a major role in 
+the prediction model, while MARS did not at all. This seems rational as it was 
+the model with the smallest RMSE and largest $R^2$.
+
+### Model Evaluation 
+#### Model Selection Criteria
+
+To select the best model to make predictions, we looked at the following
+goodness-of-fit metrics:
+
+ 1. \(R^2\), which represents the proportion of the variance explained by the model
+ 2. *Root Mean Squared Error* (RMSE), which is the square root of the mean squared
+ difference between the observation and the fitted value.
+ 3. *Mean Absolute Error* (MAE), which is the average of all absolute errors. 
+ Absolute Error is the amount of error in the measurements. It is the difference 
+ between the measured value and 'true' value.
+ 
+We looked at \(R^2\) and RMSE as our primary metrics and selected the model which 
+performed best on both. If no model performs best on both, the MAE of the model 
+results on the training set were used to break the tie. The remaining 30% of the 
+historical data (i.e. predictors `test.p` and response `test.r`) was used to determine 
+the model performance.
+ 
+```{r bwplot, fig.width=8, fig.height=4}
+fits = list(MARS = marsModel, 
+            Cubist = cubModel, 
+            PLS = plsModel, 
+            GBM = gbm_m, 
+            RF = rfModel)
+bwplot(resamples(fits), main = "Comparisons of All Models")
+```
+
+After fitting a multi-linear, MARS, cubist, partial least squared, GBM, and random
+forest model to the training data, it was evident that a random forest model is 
+well-suited for modeling the data. This model outperformed the other linear and tree-based 
+models in every resampling performance metric. The RMSE and $R^2$ resampling 
+performance metrics of the Random Forest model was superior to all other model. 
+
+```{r compTable}
+set.seed(525)
+marsPred = predict(marsModel, newdata = test.p)
+cubPred = predict(cubModel , newdata = test.p)
+plsPred = predict(plsModel, newdata = test.p)
+gradPred = predict(gbm_m , newdata = test.p)
+rfPred = predict(rfModel, newdata = test.p)
+ensemblePred = predict(ensembleModel, newdata = test.p)
+
+compTable = data.frame(rbind(MARS = postResample(pred = marsPred, obs = test.r),
+                             CUBIST = postResample(pred = cubPred, obs = test.r),
+                             PLS = postResample(pred = plsPred, obs = test.r),
+                             GBM = postResample(pred = gradPred, obs = test.r),
+                             RF = postResample(pred = rfPred, obs = test.r),
+                             Ensemble = postResample(pred = ensemblePred, obs = test.r)))
+
+kable(compTable, digits = 3L, caption = "Performance Metric for All Models")
+```
+
+Adding the `ensemble` model to this list, the table highlights the performance 
+criteria for all the models built. For exceptional prediction quality, a meta-
+algorithm such as the `ensemble` method proves to be beneficial since it combine 
+several learning techniques into one predictive model in order to decrease 
+variance, bias, and improve predictions. This meta-model outperformed the other 
+linear, and tree-based models in every resampling performance metric, and it was
+superior to the `Random Forest`, the best single model. 
+
+Typically, for predicting physical processes, $R^2$ should be greater than 50%, 
+as this only explains about 29% of the standard deviation. The model with both 
+the smallest errors and account for the largest proportion of the data variability 
+was the `ensemble` model, with RMSE = 0.100 and $R^2$ = 0.674. From the descriptive 
+statistic, it was clear that the predictions are similar to the actual values. The 
+predictions are consistent throughout the range of pH. 
+
+```{r test_act.vs.pred_table}
+rbind(test_actual = describe(test.r)[,-c(1,6,7)],
+      test_prediction = describe(predict(ensembleModel, 
+                                         newdata = test.p))[,-c(1,6,7)]) %>% 
+  kable(digits = 2L,
+        caption = "Comparison of the Test Set Actual and Predicted Values")
+```
+
+```{r test_act.vs.pred_plot}
+ggplot(data.frame(prediction = predict(ensembleModel, newdata = test.p), 
+                  actual = test.r)) + 
+  geom_point(aes(x = prediction, y = actual)) + 
+  geom_smooth(aes(x = prediction, y = actual)) +
+  labs(title = "Plot of Actual vs Prediction Values", 
+       subtitle = "using the Ensemble Model") +
+  geom_text(x = 8.75, y = 8, label = "RMSE = 0.10\n R-squared = 0.67") +
+  theme_bw()
+```
+
+Because the models are weighted such that predictions are maximized, consistent 
+quality is expected. If a model predicts better at lower pH, the `ensemble` model
+will be up-weighted over that specific range. Therefore, according to this data set 
+and performance metrics, we confidently say that `Model #7 - Ensemble Model` was the 
+best model based on all criteria that were used to evaluate its fit, and was used to
+predict the pH levels of the evaluation set.
+
+#### The Optimal Model
+
+With the optimal model decided, we re-trained the model on the entire training set 
+before we made the predictions on the evaluation data.
+
+```{r optimal_model, eval = FALSE}
+set.seed(525)
+# Full, clean training data
+Xtrain = train_df_cleaned %>% select(-PH)
+yTrain = train_df_cleaned$PH
+
+# Model Tuning Grids
+marsGrid = expand.grid(.degree = 2, .nprune = 27)
+cubGrid = expand.grid(.committees = 20, .neighbors = 9)
+rfGrid = expand.grid(mtry = 20)
+xgbGrid = expand.grid(eta = 0.01, nrounds = 1000, max_depth = 6, 
+                      gamma = 0, colsample_bytree = 0.8, 
+                      min_child_weight = 0.8, subsample = 0.8)
+# List of Algorithms to use in Ensemble
+tuning_list = list(caretModelSpec(method = "earth", tuneGrid = marsGrid),
+                   caretModelSpec(method = "cubist", tuneGrid = cubGrid),
+                   caretModelSpec(method = "rf", tuneGrid = rfGrid, 
+                                  importance = TRUE),
+                   caretModelSpec(method = "xgbTree", tuneGrid = xgbGrid))
+# Control parameters for train functions
+control = trainControl(method = 'cv',
+                       number = 5,
+                       savePredictions = 'final',
+                       index = createFolds(yTrain, 5),
+                       allowParallel = TRUE) 
+model_list = caretList(x = Xtrain,
+                       y = yTrain,
+                       trControl = control,
+                       tuneList = tuning_list)
+# Combine several predictive models via stacking
+ensembleModel_final = caretStack(model_list,
+                                 method = "glmnet",
+                                 metric = "RMSE",
+                                 trControl=trainControl(method = "cv",
+                                                        number = 5,
+                                                        savePredictions = "final"))
+```
+```{r}
+ensembleModel_final = readRDS("ensembleModel_final.rds")
+```
+
+### Prediction Result
+
+Based on the performance test, it was decided that the `ensemble` model was the 
+optimal model. With the evaluation set pre-processed identically to that of the 
+training set, it was used to make the pH prediction of beverages. 
+
+```{r prediction}
+eval_df_cleaned$PH = predict(ensembleModel_final, newdata = eval_df_cleaned)
+
+eval_df_cleaned %>%
+  ggplot(aes(PH, fill = PH > 8.75)) + 
+  geom_histogram(bins = 30) +
+  theme_bw() +
+  theme(legend.position = 'center') +
+  labs(y = 'Count', title = 'Predicted pH Levels') 
+```
+
+#### Save pH Predictions
+
+The pH predictions are save to our group's [GitHub repository](https://github.com/greeneyefirefly/DATA624-Project2).
+
+```{r save_prediction}
+# write.csv(eval_df_cleaned$PH, "StudentEvaluation_Predictions.csv")
+```
+
+### Conclusion
+
+ABC Beverage company is a beverage manufacturer that most likely produces alkaline 
+beverages. Our team was given historical data on its manufacturing processes for 
+some of these beverages, where we were tasked to determine the pH level. The data 
+was prepared for missing values, which is a crucial step for data analysis. After 
+missing values were dealt with, the data needed to be normalize. Seven models were 
+created, these included a base model, MARS, Cubist, Partial Least Square, Gradient 
+Boosting, Random Forest and Ensemble models. The data was split into training and 
+test data sets, 70% and 30% respectively. We noticed that all the models have overall 
+almost close results for RMSE, R-squared and MAE. Random Forest found to be a best 
+model among the rest. PLS performed worst among the others but still the values were 
+not significantly.
+
+Knowing the performance of these models, an Ensemble model was built as a mean to 
+improve the prediction accuracy by learning the problems with the target variable 
+and combining several models. In the end, the main processes that can likely be the
+cause for a great shift in the pH levels are `Mnf.Flow`, `Usage.cont`, `Oxygen.Filler`, 
+and `Pressure.Vacuum` when altered. Therefore, readjustment to the desired balance 
+can be achieve by carefully monitoring these processes. Moreover, future manufacturing 
+should carefully consider these processes as a priority during evaluation of the pH 
+levels for the currently produced beverages. These features can also save on operational 
+cost for the trial and error phase during the creation of new beverages.
+
+### Works Cited
+
+ 1. Max Kuhn and Kjell Johnson. Applied Predictive Modeling. Springer, New York, 2013.
+
+ 2. Yeo, I., & Johnson, R. (2000). A New Family of Power Transformations to Improve 
+ Normality or Symmetry. Biometrika, 87(4), 954–959. Retrieved November 26, 2020, 
+ from http://www.jstor.org/stable/2673623
+
+### Code Appendix
+
+```{r setup2, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, eval=FALSE)
+```
+
+```{r rpackages}
+```
+```{r loaddata}
+```
+```{r sumstat}
+```
+```{r missing}
+```
+```{r outliers}
+```
+```{r corrgram, fig.width=7, fig.height=7}
+```
+```{r corr}
+```
+```{r tragetviz}
+```
+```{r impute, eval = FALSE}
+```
+```{r dummyVars}
+```
+```{r corr_clean}
+```
+```{r normality}
+```
+```{r trainTestSplit}
+```
+```{r baseline}
+```
+```{r mars, eval = FALSE}
+```
+```{r mars.fig, fig.height=4, fig.width=8}
+```
+```{r mars.coef}
+```
+```{r cubist, eval = FALSE}
+```
+```{r cub.fig, fig.height=4, fig.width=8}
+```
+```{r cub.coef, fig.height=5}
+```
+```{r pls}
+```
+```{r pls.fig, fig.height=4, fig.width=8}
+```
+```{r gbm, eval = FALSE}
+```
+```{r gbm.fig, fig.height=4, fig.width=8}
+```
+```{r rf, eval = FALSE}
+```
+```{r rf.fig, fig.height=4, fig.width=8}
+```
+```{r rf.varImp, fig.height=5}
+```
+```{r ensemble, eval = FALSE}
+```
+```{r ensemble_imp, fig.height=4}
+```
+```{r bwplot, fig.width=8, fig.height=4}
+```
+```{r compTable}
+```
+```{r test_act.vs.pred_table}
+```
+```{r test_act.vs.pred_plot}
+```
+```{r optimal_model, eval = FALSE}
+```
+```{r prediction}
+```
+```{r save_prediction}
+```
